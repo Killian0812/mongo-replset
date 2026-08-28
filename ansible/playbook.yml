@@ -1,0 +1,68 @@
+---
+- hosts: mongo
+  become: true
+  vars:
+    mongo_version: "7.0"
+    replica_set_name: "rs0"
+
+  tasks:
+    - name: Add MongoDB repo
+      yum_repository:
+        name: mongodb-org-7.0
+        description: MongoDB Repository
+        baseurl: "https://repo.mongodb.org/yum/amazon/2023/mongodb-org/7.0/x86_64/"
+        gpgcheck: yes
+        gpgkey: "https://www.mongodb.org/static/pgp/server-7.0.asc"
+        enabled: yes
+
+    - name: Install mongodb-org
+      yum:
+        name: mongodb-org
+        state: present
+
+    # /dev/xvdb is the EBS volume attached in ec2.tf (aws_volume_attachment)
+    - name: Format data volume
+      filesystem:
+        fstype: xfs
+        dev: /dev/xvdb
+
+    - name: Mount data volume
+      mount:
+        path: /data/db
+        src: /dev/xvdb
+        fstype: xfs
+        state: mounted
+
+    - name: Fix data dir ownership
+      file:
+        path: /data/db
+        owner: mongod
+        group: mongod
+        recurse: true
+
+    # generate once beforehand: `make keyfile` - same file must land on every node
+    - name: Distribute keyfile
+      copy:
+        src: files/mongo-keyfile
+        dest: /etc/mongo-keyfile
+        owner: mongod
+        group: mongod
+        mode: "0400"
+
+    - name: Template mongod.conf
+      template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+      notify: restart mongod
+
+    - name: Enable + start mongod
+      systemd:
+        name: mongod
+        enabled: true
+        state: started
+
+  handlers:
+    - name: restart mongod
+      systemd:
+        name: mongod
+        state: restarted
